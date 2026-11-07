@@ -288,7 +288,7 @@ async function transcribe(blob) {
         }
         if (res.status === 400 && thinkOff) {
           const t = await res.clone().text();
-          if (/think/i.test(t)) continue; // this model doesn't take that setting, retry without it
+          if (!/API key/i.test(t)) continue; // this model may not take the "no thinking" setting, retry without it
         }
         break;
       }
@@ -299,14 +299,15 @@ async function transcribe(blob) {
       if (res.status === 400 || res.status === 403) {
         let j = {}; try { j = await res.json(); } catch (e) {}
         const em = (j.error && j.error.message) || "";
-        throw new Error(/API key/i.test(em) ? "That Gemini key was refused. Tap Voice key below to paste it again." : "Gemini couldn't read the recording: " + em.slice(0, 120));
+        if (/API key/i.test(em) || res.status === 403) throw new Error("That Gemini key was refused. Tap Voice key below to paste it again.");
+        lastErr = "bad: " + em.slice(0, 160); continue; // try the next model
       }
       if (!res.ok) throw new Error("Gemini didn't answer (error " + res.status + ").");
       const j = await res.json();
       text = ((j.candidates || [])[0]?.content?.parts || []).map(p => p.text || "").join("").trim();
       break;
     }
-    if (text === null) throw new Error(lastErr === "limit" ? "Gemini's free limit was hit. Wait a minute and try again." : lastErr === "slow" || lastErr === "busy" ? "Gemini is slow or busy right now. Try again in a minute." : "Couldn't find a Gemini model that works. Tap Voice key below and check your key.");
+    if (text === null) throw new Error(lastErr === "limit" ? "Gemini's free limit was hit. Wait a minute and try again." : lastErr === "model" ? "Couldn't find a Gemini model that works. Tap Voice key below and check your key." : lastErr === "slow" || lastErr === "busy" ? "Gemini is slow or busy right now. Try again in a minute." : "Gemini couldn't read the recording. " + lastErr.replace(/^bad: /, ""));
     if (!text) throw new Error("Didn't catch any speech. Try again, closer to the mic.");
     const cur = $("text").value.trim();
     $("text").value = cur ? cur + "\n\n" + text : text;
