@@ -53,7 +53,12 @@
   @media (prefers-reduced-motion: reduce) { #mic.rec { animation:none; } button { transition:none; } }
   .hint { text-align:center; color:var(--mut); font-size:14px; margin:0 0 14px; min-height:21px; }
   .thumbs { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0 0; }
-  .thumbs img { width:76px; height:76px; object-fit:cover; border-radius:12px; border:1px solid var(--line); }
+  .thumbs img { width:76px; height:76px; object-fit:cover; border-radius:12px; border:1px solid var(--line); display:block; }
+  .th { position:relative; }
+  .th button { position:absolute; top:-8px; right:-8px; width:32px; height:32px; padding:0; border-radius:50%; border:2px solid var(--card); background:#DC2626; color:#fff; display:flex; align-items:center; justify-content:center; }
+  .th button::after { content:""; position:absolute; inset:-6px; }
+  .th button svg { width:16px; height:16px; }
+  button.danger { width:100%; min-height:48px; margin-top:10px; padding:10px 14px; border:1.5px solid #FCA5A5; border-radius:12px; background:var(--card); color:#B91C1C; font-weight:700; font-size:16px; }
   #weekList { padding:6px 16px; }
   .day { display:flex; justify-content:space-between; align-items:center; gap:12px; min-height:64px; padding:10px 0; border-bottom:1px solid var(--line); cursor:pointer; }
   .day:last-child { border:0; }
@@ -119,6 +124,7 @@
       </div>
     </div>
     <button id="save" class="primary">Save day</button>
+    <button id="clear" class="danger">Clear this day</button>
     <p class="hint" style="margin-top:6px"><button type="button" class="link" id="keyLink">Voice key</button></p>
   </div>
 
@@ -137,7 +143,7 @@ const SUPABASE_URL = "https://ulokjhbjcmbpaxdkmbui.supabase.co";
 const SUPABASE_KEY = "sb_publishable_rF-n0MwPJBZlXJlEAJhFPg_u_xyQXEn";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const $ = id => document.getElementById(id);
-let user = null, signUpMode = false, pending = [];
+let user = null, signUpMode = false, pending = [], savedPh = [], savedId = null;
 
 const pad = n => String(n).padStart(2,"0");
 const iso = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
@@ -314,10 +320,49 @@ $("keyCancel").onclick = () => $("keyCard").classList.add("hide");
 $("photos").onchange = async e => {
   for (const f of e.target.files) {
     const blob = await shrink(f);
-    pending.push(blob);
-    const img = new Image(); img.src = URL.createObjectURL(blob); $("thumbs").appendChild(img);
+    pending.push({ blob, url: URL.createObjectURL(blob) });
   }
   e.target.value = "";
+  renderThumbs();
+};
+const XSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+function renderThumbs() {
+  const box = $("thumbs"); box.innerHTML = "";
+  const add = (url, label, fn) => {
+    const w = document.createElement("div"); w.className = "th";
+    const i = new Image(); i.src = url; i.alt = "Photo";
+    const b = document.createElement("button"); b.type = "button"; b.setAttribute("aria-label", label); b.innerHTML = XSVG; b.onclick = fn;
+    w.append(i, b); box.appendChild(w);
+  };
+  savedPh.forEach(p => add(p.url, "Delete this photo", () => deleteSaved(p)));
+  pending.forEach(p => add(p.url, "Remove this photo", () => { pending = pending.filter(x => x !== p); renderThumbs(); }));
+}
+async function deleteSaved(p) {
+  if (!confirm("Delete this photo? This can't be undone.")) return;
+  msg("Deleting…");
+  const r1 = await sb.storage.from("profiling-photos").remove([p.path]);
+  if (r1.error) return msg("Couldn't delete: " + r1.error.message, true);
+  const r2 = await sb.from("entry_photos").delete().eq("id", p.id);
+  if (r2.error) return msg("Couldn't delete: " + r2.error.message, true);
+  savedPh = savedPh.filter(x => x !== p); renderThumbs(); msg("Photo deleted.");
+}
+$("clear").onclick = async () => {
+  if (busyVoice || (mediaRec && mediaRec.state === "recording")) return msg("Finish the recording first (tap the mic to stop).", true);
+  const has = $("text").value.trim() || pending.length || savedId;
+  if (!has) return msg("Nothing to clear.");
+  const q = savedId ? "Clear this whole day? This deletes the saved entry and its photos, and can't be undone." : "Clear what you've typed and the photos you've added?";
+  if (!confirm(q)) return;
+  $("clear").disabled = true; msg("Clearing…");
+  try {
+    if (savedId) {
+      const paths = savedPh.map(p => p.path);
+      if (paths.length) { const r = await sb.storage.from("profiling-photos").remove(paths); if (r.error) throw r.error; }
+      let r = await sb.from("entry_photos").delete().eq("entry_id", savedId); if (r.error) throw r.error;
+      r = await sb.from("daily_entries").delete().eq("id", savedId); if (r.error) throw r.error;
+    }
+    $("text").value = ""; pending = []; savedPh = []; savedId = null; renderThumbs(); msg("Cleared ✓");
+  } catch (e) { msg("Couldn't clear: " + e.message, true); }
+  $("clear").disabled = false;
 };
 function shrink(file, max = 1600) {
   return new Promise(res => {
@@ -335,16 +380,18 @@ function shrink(file, max = 1600) {
 
 /* ---------- data ---------- */
 async function loadDay() {
-  pending = []; $("thumbs").innerHTML = ""; msg("");
+  pending = []; savedPh = []; savedId = null; renderThumbs(); msg("");
   const { data, error } = await sb.from("daily_entries").select("id, transcript, status").eq("entry_date", $("date").value).maybeSingle();
   if (error) return msg(error.message, true);
   $("text").value = data ? (data.transcript || "") : "";
   if (data) {
-    const { data: ph } = await sb.from("entry_photos").select("storage_path").eq("entry_id", data.id);
+    savedId = data.id;
+    const { data: ph } = await sb.from("entry_photos").select("id, storage_path").eq("entry_id", data.id);
     if (ph && ph.length) {
       const { data: urls } = await sb.storage.from("profiling-photos").createSignedUrls(ph.map(p => p.storage_path), 3600);
-      (urls || []).forEach(u => { if (u.signedUrl) { const i = new Image(); i.src = u.signedUrl; $("thumbs").appendChild(i); } });
+      savedPh = ph.map((p, k) => ({ id: p.id, path: p.storage_path, url: urls && urls[k] && urls[k].signedUrl })).filter(p => p.url);
     }
+    renderThumbs();
   }
 }
 
@@ -358,7 +405,7 @@ $("save").onclick = async () => {
       .upsert({ user_id: user.id, entry_date: day, transcript: text, status: "draft" }, { onConflict: "user_id,entry_date" })
       .select("id").single();
     if (error) throw error;
-    for (const blob of pending) {
+    for (const { blob } of pending) {
       const path = `${user.id}/${day}/${Date.now()}-${Math.random().toString(36).slice(2,7)}.jpg`;
       const up = await sb.storage.from("profiling-photos").upload(path, blob, { contentType: "image/jpeg" });
       if (up.error) throw up.error;
