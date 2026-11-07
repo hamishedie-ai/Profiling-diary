@@ -116,6 +116,7 @@
     <div class="hide" id="keyCard" role="dialog" aria-modal="true" aria-labelledby="keyTitle">
       <div class="box">
         <h2 id="keyTitle">You have no Gemini key entered</h2>
+        <p id="keyState" style="font-weight:700"></p>
         <p>Add your Gemini key to have accurate voice recordings. It's free, and it stays on this phone. Your recording is sent to Google to be turned into text.</p>
         <label for="keyIn">Gemini key</label>
         <input id="keyIn" type="password" autocomplete="off" placeholder="Paste your key here">
@@ -123,6 +124,7 @@
         <button class="primary" id="saveKey">Save key</button>
         <div style="height:8px"></div>
         <button class="ghost" id="keyCancel" style="width:100%">Not now</button>
+        <button class="link hide" id="keyRemove" type="button" style="width:100%">Remove the saved key</button>
       </div>
     </div>
     <button id="save" class="primary">Save day</button>
@@ -208,7 +210,15 @@ $("saveKey").onclick = () => {
   $("keyIn").value = ""; $("keyCard").classList.add("hide"); msg("Key saved. Tap the mic and talk."); keyWarn();
 };
 function keyWarn() { $("keyWarn").classList.toggle("hide", !!getKey()); }
-function askKey() { $("keyCard").classList.remove("hide"); }
+function askKey() {
+  const k = getKey();
+  $("keyTitle").textContent = k ? "Your Gemini key" : "You have no Gemini key entered";
+  $("keyState").textContent = k ? "A key is saved on this phone (ends in " + k.slice(-4) + "). Paste a new one below to replace it." : "";
+  $("keyState").classList.toggle("hide", !k);
+  $("keyRemove").classList.toggle("hide", !k);
+  $("keyCard").classList.remove("hide");
+}
+$("keyRemove").onclick = () => { try { localStorage.removeItem("geminiKey"); } catch (e) {} $("keyCard").classList.add("hide"); keyWarn(); msg("Key removed."); };
 $("keyWarn").onclick = askKey;
 $("mic").onclick = () => {
   if (busyVoice) return;
@@ -314,7 +324,7 @@ async function transcribe(blob) {
     msg("Added. Check it reads right, then Save day.");
   } catch (e) {
     msg(e.name === "TypeError" ? "No internet connection." : e.message, true);
-    if (/refused/.test(e.message)) $("keyCard").classList.remove("hide");
+    if (/refused/.test(e.message)) askKey();
   } finally {
     busyVoice = false; $("mic").disabled = false; setRec(false);
   }
@@ -323,7 +333,7 @@ function setRec(on) {
   $("mic").classList.toggle("rec", on);
   $("micHint").textContent = on ? "Recording… tap to stop" : "Tap and say what you did today";
 }
-$("keyLink").onclick = () => $("keyCard").classList.remove("hide");
+$("keyLink").onclick = askKey;
 $("keyCancel").onclick = () => $("keyCard").classList.add("hide");
 
 /* ---------- photos ---------- */
